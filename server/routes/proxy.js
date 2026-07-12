@@ -125,8 +125,14 @@ async function proxyApiRequest(reqUrl, req, res) {
   const isSearch = parsedReq.searchParams.get('types') === 'search';
   const isEmptyResult = responseText.trim() === '[]';
   const isError = responseText.includes('"error"') || responseText.includes('"status":0');
+  const isAudioUrl = parsedReq.searchParams.get('types') === 'url';
+  const isEmptyAudioUrl = isAudioUrl && (
+    responseText.includes('"url":""') ||
+    responseText.includes('"br":-1') ||
+    responseText.includes('"size":0')
+  );
 
-  let shouldCache = upstream.status === 200 && !isError && !bypassCache;
+  let shouldCache = upstream.status === 200 && !isError && !isEmptyAudioUrl && !bypassCache;
   if (isSearch && isEmptyResult) shouldCache = false;
 
   if (shouldCache) {

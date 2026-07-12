@@ -910,6 +910,115 @@ const API = {
 
 Object.freeze(API);
 
+function hasPlayableAudioUrl(audioData) {
+    return Boolean(audioData && typeof audioData.url === "string" && audioData.url.trim() !== "");
+}
+
+function getArtistTokens(song) {
+    const artistValue = normalizeArtistValue(song?.artist ?? song?.artists ?? song?.singers ?? song?.singer);
+    const values = Array.isArray(artistValue) ? artistValue : [artistValue];
+    return values
+        .filter((value) => typeof value === "string")
+        .flatMap((value) => value.split(/[,，、/&|]+|\s+-\s+|\s+\/\s+/g))
+        .map((value) => value.trim())
+        .filter((value) => value && value !== "未知艺术家");
+}
+
+function normalizeSongMatchText(value) {
+    return String(value || "")
+        .toLowerCase()
+        .replace(/[（(].*?[）)]/g, "")
+        .replace(/\s+/g, "")
+        .trim();
+}
+
+function isLikelySameSong(candidate, originalSong) {
+    const originalName = normalizeSongMatchText(originalSong?.name);
+    const candidateName = normalizeSongMatchText(candidate?.name);
+    if (!originalName || !candidateName || candidateName !== originalName) {
+        return false;
+    }
+
+    const originalArtists = getArtistTokens(originalSong).map(normalizeSongMatchText).filter(Boolean);
+    if (originalArtists.length === 0) {
+        return true;
+    }
+
+    const candidateArtistText = getArtistTokens(candidate).map(normalizeSongMatchText).join(",");
+    return originalArtists.some((artist) => artist && candidateArtistText.includes(artist));
+}
+
+function buildFallbackSearchTerms(song) {
+    const name = typeof song?.name === "string" ? song.name.trim() : "";
+    if (!name) {
+        return [];
+    }
+
+    const artist = getArtistTokens(song)[0] || "";
+    return Array.from(new Set([
+        artist ? `${name} ${artist}` : "",
+        name,
+    ].filter(Boolean)));
+}
+
+async function findFallbackSong(song, source = "netease") {
+    const terms = buildFallbackSearchTerms(song);
+    for (const term of terms) {
+        try {
+            const results = await API.search(term, source, 8, 1);
+            const candidates = Array.isArray(results) ? results : [];
+            const exactMatch = candidates.find((candidate) => isLikelySameSong(candidate, song));
+            if (exactMatch) {
+                return exactMatch;
+            }
+        } catch (error) {
+            console.warn(`Fallback search failed for ${source}: ${term}`, error);
+        }
+    }
+    return null;
+}
+
+async function resolveSongAudioData(song, quality = "320", options = {}) {
+    const { isRetry = false } = options;
+    let primaryUrl = API.getSongUrl(song, quality);
+    if (isRetry) {
+        primaryUrl += "&nocache=true";
+    }
+
+    debugLog(`Fetching audio URL: ${primaryUrl}`);
+    const primaryAudioData = await API.fetchJson(primaryUrl);
+    if (hasPlayableAudioUrl(primaryAudioData)) {
+        return { audioData: primaryAudioData, sourceSong: song, usedFallbackSource: false };
+    }
+
+    debugLog("当前曲库未返回可播放地址，尝试切换到网易源兜底");
+
+    const fallbackSources = ["netease"].filter((source) => source !== (song?.source || "").toLowerCase());
+    for (const source of fallbackSources) {
+        const fallbackSong = await findFallbackSong(song, source);
+        if (!fallbackSong) {
+            continue;
+        }
+
+        let fallbackUrl = API.getSongUrl(fallbackSong, quality);
+        if (isRetry) {
+            fallbackUrl += "&nocache=true";
+        }
+
+        try {
+            const fallbackAudioData = await API.fetchJson(fallbackUrl);
+            if (hasPlayableAudioUrl(fallbackAudioData)) {
+                debugLog(`已切换到${source}源播放: ${fallbackSong.name}`);
+                return { audioData: fallbackAudioData, sourceSong: fallbackSong, usedFallbackSource: true };
+            }
+        } catch (error) {
+            console.warn(`Fallback audio URL failed for ${source}`, error);
+        }
+    }
+
+    return { audioData: primaryAudioData, sourceSong: song, usedFallbackSource: false };
+}
+
 const state = {
     onlineSongs: [],
     searchResults: cloneSearchResults(savedLastSearchState?.results) || [],
@@ -5584,16 +5693,17 @@ async function playSong(song, options = {}) {
         updateCurrentSongInfo(song, { loadArtwork: false });
 
         const quality = state.playbackQuality || '320';
-        let audioUrl = API.getSongUrl(song, quality);
-        if (isRetry) {
-            audioUrl += '&nocache=true';
-        }
+        const resolvedAudio = await resolveSongAudioData(song, quality, { isRetry });
+        const { audioData, usedFallbackSource } = resolvedAudio;
+        const audioUrl = hasPlayableAudioUrl(audioData) ? audioData.url : "";
         debugLog(`获取音频URL: ${audioUrl}`);
 
-        const audioData = await API.fetchJson(audioUrl);
-
-        if (!audioData || !audioData.url) {
+        if (!hasPlayableAudioUrl(audioData)) {
             throw new Error('无法获取音频播放地址');
+        }
+
+        if (usedFallbackSource) {
+            showNotification("当前曲库播放地址失效，已自动切换可用音源", "warning");
         }
 
         const originalAudioUrl = audioData.url;
@@ -6292,10 +6402,13 @@ async function downloadSong(song, quality = "320") {
     try {
         showNotification("正在准备下载...");
 
-        const audioUrl = API.getSongUrl(song, quality);
-        const audioData = await API.fetchJson(audioUrl);
+        const { audioData, usedFallbackSource } = await resolveSongAudioData(song, quality, { isRetry: true });
 
-        if (audioData && audioData.url) {
+        if (hasPlayableAudioUrl(audioData)) {
+            if (usedFallbackSource) {
+                showNotification("原曲库下载地址失效，已自动切换可用音源", "warning");
+            }
+
             const proxiedAudioUrl = buildAudioProxyUrl(audioData.url);
             const preferredAudioUrl = preferHttpsUrl(audioData.url);
 

@@ -147,8 +147,14 @@ async function proxyApiRequest(url: URL, request: Request, waitUntil?: (promise:
   const isSearch = url.searchParams.get("types") === "search";
   const isEmptyResult = responseText.trim() === "[]";
   const isError = responseText.includes('"error"') || responseText.includes('"status":0');
+  const isAudioUrl = url.searchParams.get("types") === "url";
+  const isEmptyAudioUrl = isAudioUrl && (
+    responseText.includes('"url":""') ||
+    responseText.includes('"br":-1') ||
+    responseText.includes('"size":0')
+  );
   
-  let shouldCache = upstream.status === 200 && request.method === "GET" && !isError && !bypassCache;
+  let shouldCache = upstream.status === 200 && request.method === "GET" && !isError && !isEmptyAudioUrl && !bypassCache;
   
   // 如果是搜索请求且结果为空，通常是 API 繁忙或异常，不建议长缓存
   if (isSearch && isEmptyResult) {
