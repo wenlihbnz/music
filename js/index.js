@@ -649,9 +649,7 @@ function buildAudioProxyUrl(url) {
 
 const SOURCE_OPTIONS = [
     { value: "netease", label: "网易云音乐" },
-    { value: "kuwo", label: "酷我音乐" },
-    { value: "joox", label: "JOOX音乐" },
-    { value: "bilibili", label: "哔哩哔哩" }
+    { value: "joox", label: "JOOX音乐" }
 ];
 
 function normalizeSource(value) {
@@ -991,9 +989,11 @@ async function resolveSongAudioData(song, quality = "320", options = {}) {
         return { audioData: primaryAudioData, sourceSong: song, usedFallbackSource: false };
     }
 
-    debugLog("当前曲库未返回可播放地址，尝试切换到网易源兜底");
+    debugLog("当前曲库未返回可播放地址，尝试切换备用音源");
 
-    const fallbackSources = ["netease"].filter((source) => source !== (song?.source || "").toLowerCase());
+    const fallbackSources = ["netease", "joox"].filter(
+        (source) => source !== (song?.source || "").toLowerCase()
+    );
     for (const source of fallbackSources) {
         const fallbackSong = await findFallbackSong(song, source);
         if (!fallbackSong) {
@@ -6188,7 +6188,7 @@ function pickRandomExploreGenre() {
     return genres[index];
 }
 
-const EXPLORE_RADAR_SOURCES = ["netease", "kuwo"];
+const EXPLORE_RADAR_SOURCES = ["netease", "joox"];
 
 function pickRandomExploreSource() {
     if (!Array.isArray(EXPLORE_RADAR_SOURCES) || EXPLORE_RADAR_SOURCES.length === 0) {
