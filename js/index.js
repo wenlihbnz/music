@@ -775,11 +775,14 @@ const API = {
     },
 
     fetchJson: async (url) => {
+        const controller = new AbortController();
+        const timeoutId = window.setTimeout(() => controller.abort(), 12000);
         try {
             const response = await fetch(url, {
                 headers: {
                     "Accept": "application/json",
                 },
+                signal: controller.signal,
             });
 
             if (!response.ok) {
@@ -807,6 +810,8 @@ const API = {
         } catch (error) {
             console.error("API request error:", error);
             throw error;
+        } finally {
+            window.clearTimeout(timeoutId);
         }
     },
 
@@ -5819,19 +5824,10 @@ async function playSong(song, options = {}) {
         if (autoplay) {
             playPromise = dom.audioPlayer.play();
             if (playPromise !== undefined) {
-                playPromise.catch(async error => {
-                    console.error('播放失败:', error);
-                    if (!isRetry) {
-                        debugLog('音频播放遇到错误，尝试刷新缓存重试...');
-                        try {
-                            await playSong(song, { ...options, isRetry: true });
-                        } catch (retryError) {
-                            showNotification('播放失败，请检查网络连接', 'error');
-                        }
-                    } else {
-                        showNotification('播放失败，请检查网络连接', 'error');
-                    }
-                });
+                // 必须等待浏览器确认真正开始播放。以前这里只挂 catch 后立即返回，
+                // 会把 NotAllowedError、失效链接等启动失败误判为“切歌成功”，
+                // 导致自动播放队列停在坏歌上。
+                await playPromise;
             } else {
                 playPromise = null;
             }
